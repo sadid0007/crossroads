@@ -1,0 +1,342 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ==================== USERS & AUTH ====================
+
+model User {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  phone         String?
+  passwordHash  String?
+  role          String    @default("student") // student, evaluator, admin, super_admin, counselor
+  status        String    @default("active")
+  targetBand    Float?
+  avatarUrl     String?
+  provider      String?   // google, email
+  providerId    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  attempts              Attempt[]
+  evaluations           Evaluation[]
+  writingAssignments    WritingSubmission[]   @relation("EvaluatorWriting")
+  speakingAssignments   SpeakingSubmission[]  @relation("EvaluatorSpeaking")
+  questionTypePerfs     QuestionTypePerformance[]
+  auditLogs             AuditLog[]
+  notifications         Notification[]
+  sessions              Session[]
+}
+
+model Session {
+  id           String   @id @default(uuid())
+  userId       String
+  token        String   @unique
+  expiresAt    DateTime
+  createdAt    DateTime @default(now())
+  user         User     @relation(fields: [userId], references: [id])
+}
+
+// ==================== TEST CONTENT ====================
+
+model TestPack {
+  id                String    @id @default(uuid())
+  title             String
+  description       String?
+  mode              String    // full_mock, section_practice, quick_practice
+  academicOrGeneral String    @default("academic")
+  difficulty        String    @default("medium") // easy, medium, hard
+  durationMinutes   Int
+  publishedStatus   String    @default("draft") // draft, review, approved, published, archived
+  currentVersionId  String?
+  blueprintId       String?
+  imageUrl          String?
+  tags              String?   // JSON array of tags
+  metadata          String?   // JSON
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  sections       Section[]
+  versions       TestPackVersion[]
+  attempts       Attempt[]
+  scoringConfigs ScoringConfig[]
+  blueprint      TestBlueprint?    @relation(fields: [blueprintId], references: [id])
+}
+
+model TestPackVersion {
+  id            String    @id @default(uuid())
+  testPackId    String
+  versionNumber Int
+  snapshotJson  String    // frozen copy of all content
+  publishedAt   DateTime  @default(now())
+  supersededAt  DateTime?
+
+  testPack  TestPack   @relation(fields: [testPackId], references: [id])
+  attempts  Attempt[]
+}
+
+model TestBlueprint {
+  id                   String   @id @default(uuid())
+  name                 String
+  testType             String   // academic, general
+  sectionBlueprintsJson String  // JSON structure
+  createdAt            DateTime @default(now())
+
+  testPacks TestPack[]
+}
+
+model Section {
+  id                 String  @id @default(uuid())
+  testPackId         String
+  type               String  // listening, reading, writing, speaking
+  orderIndex         Int
+  instructionsText   String?
+  timerSeconds       Int
+  navigationRules    String? // JSON
+  interPartPause     Int?    // seconds, Listening only
+  metadata           String? // JSON
+
+  testPack         TestPack          @relation(fields: [testPackId], references: [id], onDelete: Cascade)
+  passagesOrPrompts PassageOrPrompt[]
+  questionGroups   QuestionGroup[]
+  sectionAttempts  SectionAttempt[]
+}
+
+model ContentAsset {
+  id            String  @id @default(uuid())
+  type          String  // audio, image, text
+  storagePath   String
+  url           String
+  mimeType      String?
+  fileSizeBytes Int?
+  durationSecs  Float?  // audio only
+  metadata      String? // JSON
+  createdAt     DateTime @default(now())
+
+  passagesOrPrompts PassageOrPrompt[]
+  speakingSubmissions SpeakingSubmission[]
+}
+
+model PassageOrPrompt {
+  id              String  @id @default(uuid())
+  sectionId       String
+  title           String?
+  contentHtml     String
+  assetId         String?
+  orderIndex      Int
+  paragraphAnchors String? // JSON for linking question groups
+
+  section        Section       @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  asset          ContentAsset? @relation(fields: [assetId], references: [id])
+  questionGroups QuestionGroup[]
+}
+
+model QuestionGroup {
+  id                     String  @id @default(uuid())
+  sectionId              String
+  linkedPassageOrPromptId String?
+  title                  String?
+  instructionsText       String?
+  orderIndex             Int
+  partNumber             Int?    // For listening parts (1-4)
+
+  section          Section          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  linkedPassage    PassageOrPrompt? @relation(fields: [linkedPassageOrPromptId], references: [id])
+  questions        Question[]
+}
+
+model Question {
+  id                  String  @id @default(uuid())
+  groupId             String
+  type                String  // multiple_choice_single, multiple_choice_multiple, fill_blank, short_answer, matching, map_labeling, true_false_ng, yes_no_ng, matching_headings, matching_info, matching_features, matching_sentence_endings, sentence_completion, summary_completion, table_completion, flowchart_completion, form_completion, note_completion
+  text                String
+  optionsJson         String? // JSON array of options
+  answerSchemaJson    String  // JSON correct answer(s)
+  answerVariantsJson  String? // JSON alternative accepted answers
+  validationRules     String? // JSON (spelling sensitivity, word limit, etc.)
+  explanationText     String? // For Review Mode
+  subSkillTags        String? // JSON array of tags
+  marks               Int     @default(1)
+  orderIndex          Int
+  audioTimestamp      Float?  // seconds, Listening only for Review Mode
+  imageUrl            String? // For map/diagram questions
+
+  group    QuestionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  answers  Answer[]
+}
+
+// ==================== ATTEMPTS & ANSWERS ====================
+
+model Attempt {
+  id                  String    @id @default(uuid())
+  userId              String
+  testPackId          String
+  testPackVersionId   String?
+  status              String    @default("not_started") // not_started, in_progress, submitted, evaluated
+  mode                String    @default("simulation") // simulation, practice
+  startedAt           DateTime?
+  submittedAt         DateTime?
+  finalScoreStatus    String?   // partial, provisional, final
+  overallBandEstimate Float?
+  deviceInfo          String?
+  browserInfo         String?
+  createdAt           DateTime  @default(now())
+
+  user            User              @relation(fields: [userId], references: [id])
+  testPack        TestPack          @relation(fields: [testPackId], references: [id])
+  testPackVersion TestPackVersion?  @relation(fields: [testPackVersionId], references: [id])
+  sectionAttempts SectionAttempt[]
+}
+
+model SectionAttempt {
+  id                   String    @id @default(uuid())
+  attemptId            String
+  sectionId            String
+  status               String    @default("not_started") // not_started, in_progress, submitted
+  startedAt            DateTime?
+  submittedAt          DateTime?
+  timerRemainingSeconds Int?
+  rawScore             Int?
+  bandScoreEstimate    Float?
+  timeSpentSeconds     Int?
+  currentPartNumber    Int?      // For Listening navigation tracking
+
+  attempt             Attempt              @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  section             Section              @relation(fields: [sectionId], references: [id])
+  answers             Answer[]
+  writingSubmissions  WritingSubmission[]
+  speakingSubmissions SpeakingSubmission[]
+}
+
+model Answer {
+  id               String    @id @default(uuid())
+  sectionAttemptId String
+  questionId       String
+  answerValueJson  String?   // JSON
+  isCorrect        Boolean?
+  isFlagged        Boolean   @default(false)
+  timeSpentSeconds Int?
+  savedAt          DateTime  @default(now())
+  version          Int       @default(1)
+
+  sectionAttempt SectionAttempt @relation(fields: [sectionAttemptId], references: [id], onDelete: Cascade)
+  question       Question       @relation(fields: [questionId], references: [id])
+}
+
+// ==================== WRITING & SPEAKING SUBMISSIONS ====================
+
+model WritingSubmission {
+  id                  String  @id @default(uuid())
+  sectionAttemptId    String
+  taskNumber          Int     // 1 or 2
+  contentText         String
+  wordCount           Int
+  evaluationStatus    String  @default("pending") // pending, in_review, evaluated
+  assignedEvaluatorId String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  sectionAttempt    SectionAttempt @relation(fields: [sectionAttemptId], references: [id], onDelete: Cascade)
+  assignedEvaluator User?          @relation("EvaluatorWriting", fields: [assignedEvaluatorId], references: [id])
+  evaluations       Evaluation[]
+}
+
+model SpeakingSubmission {
+  id                  String  @id @default(uuid())
+  sectionAttemptId    String
+  partNumber          Int     // 1, 2, or 3
+  audioAssetId        String?
+  durationSeconds     Float?
+  transcriptText      String?
+  evaluationStatus    String  @default("pending")
+  assignedEvaluatorId String?
+  createdAt           DateTime @default(now())
+
+  sectionAttempt    SectionAttempt @relation(fields: [sectionAttemptId], references: [id], onDelete: Cascade)
+  audioAsset        ContentAsset?  @relation(fields: [audioAssetId], references: [id])
+  assignedEvaluator User?          @relation("EvaluatorSpeaking", fields: [assignedEvaluatorId], references: [id])
+  evaluations       Evaluation[]
+}
+
+// ==================== EVALUATIONS ====================
+
+model Evaluation {
+  id                  String    @id @default(uuid())
+  submissionType      String    // writing, speaking
+  writingSubmissionId String?
+  speakingSubmissionId String?
+  evaluatorId         String
+  rubricScoresJson    String    // JSON per-criterion bands and comments
+  overallBand         Float?
+  feedbackText        String?
+  improvementAreas    String?   // JSON
+  status              String    @default("draft") // draft, finalized
+  createdAt           DateTime  @default(now())
+  finalizedAt         DateTime?
+
+  evaluator          User                @relation(fields: [evaluatorId], references: [id])
+  writingSubmission  WritingSubmission?  @relation(fields: [writingSubmissionId], references: [id])
+  speakingSubmission SpeakingSubmission? @relation(fields: [speakingSubmissionId], references: [id])
+}
+
+// ==================== SCORING ====================
+
+model ScoringConfig {
+  id              String  @id @default(uuid())
+  testPackId      String
+  sectionType     String  // listening, reading
+  rawToBandMap    String  // JSON mapping
+  roundingRules   String? // JSON
+  version         Int     @default(1)
+  isActive        Boolean @default(true)
+
+  testPack TestPack @relation(fields: [testPackId], references: [id])
+}
+
+model QuestionTypePerformance {
+  id                 String   @id @default(uuid())
+  userId             String
+  questionType       String
+  subSkillTag        String?
+  totalAttempted     Int      @default(0)
+  totalCorrect       Int      @default(0)
+  accuracyPercentage Float    @default(0)
+  lastUpdatedAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
+
+// ==================== AUDIT & NOTIFICATIONS ====================
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  actorId     String?
+  actorRole   String?
+  action      String
+  entityType  String
+  entityId    String?
+  oldValueJson String?
+  newValueJson String?
+  timestamp   DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id])
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String
+  type      String   // test_assigned, submission_success, evaluation_complete, reminder, progress
+  title     String
+  message   String
+  isRead    Boolean  @default(false)
+  link      String?
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+}
